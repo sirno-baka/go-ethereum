@@ -1,0 +1,3 @@
+package clique
+
+var validatorSetABI = ``

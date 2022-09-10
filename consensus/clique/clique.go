@@ -19,11 +19,17 @@ package clique
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/common/math"
+	"github.com/ethereum/go-ethereum/core/systemcontracts"
+	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"io"
 	"math/big"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
@@ -184,11 +190,14 @@ type Clique struct {
 
 	// The fields below are for testing only
 	fakeDiff bool // Skip difficulty verifications
+
+	ethAPI          *ethapi.BlockChainAPI
+	validatorSetABI abi.ABI
 }
 
 // New creates a Clique proof-of-authority consensus engine with the initial
 // signers set to the ones provided by the user.
-func New(config *params.CliqueConfig, db ethdb.Database) *Clique {
+func New(config *params.CliqueConfig, db ethdb.Database, ethAPI *ethapi.BlockChainAPI) *Clique {
 	// Set any missing consensus parameters to their defaults
 	conf := *config
 	if conf.Epoch == 0 {
@@ -197,13 +206,19 @@ func New(config *params.CliqueConfig, db ethdb.Database) *Clique {
 	// Allocate the snapshot caches and create the engine
 	recents, _ := lru.NewARC(inmemorySnapshots)
 	signatures, _ := lru.NewARC(inmemorySignatures)
+	vABI, err := abi.JSON(strings.NewReader(validatorSetABI))
+	if err != nil {
+		panic(err)
+	}
 
 	return &Clique{
-		config:     &conf,
-		db:         db,
-		recents:    recents,
-		signatures: signatures,
-		proposals:  make(map[common.Address]bool),
+		config:          &conf,
+		db:              db,
+		recents:         recents,
+		signatures:      signatures,
+		proposals:       make(map[common.Address]bool),
+		ethAPI:          ethAPI,
+		validatorSetABI: vABI,
 	}
 }
 
@@ -541,8 +556,12 @@ func (c *Clique) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 	header.Extra = header.Extra[:extraVanity]
 
 	if number%c.config.Epoch == 0 {
-		for _, signer := range snap.signers() {
-			header.Extra = append(header.Extra, signer[:]...)
+		newValidators, err := c.getCurrentValidators(header.ParentHash)
+		if err != nil {
+			return err
+		}
+		for _, validator := range newValidators {
+			header.Extra = append(header.Extra, validator.Bytes()...)
 		}
 	}
 	header.Extra = append(header.Extra, make([]byte, extraSeal)...)
@@ -560,6 +579,51 @@ func (c *Clique) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 		header.Time = uint64(time.Now().Unix())
 	}
 	return nil
+}
+
+// getCurrentValidators get current validators
+func (p *Clique) getCurrentValidators(blockHash common.Hash) ([]common.Address, error) {
+	// block
+	blockNr := rpc.BlockNumberOrHashWithHash(blockHash, false)
+
+	// method
+	method := "getValidators"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // cancel when we are finished consuming integers
+
+	data, err := p.validatorSetABI.Pack(method)
+	if err != nil {
+		log.Error("Unable to pack tx for getValidators", "error", err)
+		return nil, err
+	}
+	// call
+	msgData := (hexutil.Bytes)(data)
+	toAddress := common.HexToAddress(systemcontracts.ValidatorContract)
+	gas := (hexutil.Uint64)(uint64(math.MaxUint64 / 2))
+	result, err := p.ethAPI.Call(ctx, ethapi.TransactionArgs{
+		Gas:  &gas,
+		To:   &toAddress,
+		Data: &msgData,
+	}, blockNr, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var (
+		ret0 = new([]common.Address)
+	)
+	out := ret0
+
+	if err := p.validatorSetABI.UnpackIntoInterface(out, method, result); err != nil {
+		return nil, err
+	}
+
+	valz := make([]common.Address, len(*ret0))
+	for i, a := range *ret0 {
+		valz[i] = a
+	}
+	return valz, nil
 }
 
 // Finalize implements consensus.Engine, ensuring no uncles are set, nor block

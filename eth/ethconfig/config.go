@@ -18,6 +18,7 @@
 package ethconfig
 
 import (
+	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"math/big"
 	"os"
 	"os/user"
@@ -217,11 +218,11 @@ type Config struct {
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain configuration.
-func CreateConsensusEngine(stack *node.Node, ethashConfig *ethash.Config, cliqueConfig *params.CliqueConfig, notify []string, noverify bool, db ethdb.Database) consensus.Engine {
+func CreateConsensusEngine(stack *node.Node, ethashConfig *ethash.Config, cliqueConfig *params.CliqueConfig, notify []string, noverify bool, db ethdb.Database, api *ethapi.BlockChainAPI) consensus.Engine {
 	// If proof-of-authority is requested, set it up
 	var engine consensus.Engine
 	if cliqueConfig != nil {
-		engine = clique.New(cliqueConfig, db)
+		engine = clique.New(cliqueConfig, db, api)
 	} else {
 		switch ethashConfig.PowMode {
 		case ethash.ModeFake:
