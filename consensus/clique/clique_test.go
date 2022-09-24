@@ -17,6 +17,7 @@
 package clique
 
 import (
+	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"math/big"
 	"testing"
 
@@ -37,11 +38,12 @@ import (
 // empty one **also completes** the empty one, ending up in a known-block error.
 func TestReimportMirroredState(t *testing.T) {
 	// Initialize a Clique chain with a single signer
+	api := ethapi.BlockChainAPI{}
 	var (
 		db     = rawdb.NewMemoryDatabase()
 		key, _ = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
 		addr   = crypto.PubkeyToAddress(key.PublicKey)
-		engine = New(params.AllCliqueProtocolChanges.Clique, db)
+		engine = New(params.AllCliqueProtocolChanges.Clique, db, &api)
 		signer = new(types.HomesteadSigner)
 	)
 	genspec := &core.Genesis{
